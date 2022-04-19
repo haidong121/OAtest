@@ -1,0 +1,562 @@
+package com.oa8000.prison.job;
+
+import com.cnpower.base.OaBaseTools;
+import com.cnpower.base.OaSystemConstant;
+import com.oa8000.htAddress.HtHr02ManagerNew;
+import com.oa8000.hthr.hthr00.HtHr00Constant;
+import com.oa8000.htjob.htjob00.HtJob00Constant;
+import com.oa8000.htjob.htjob00.HtJob00JobBase;
+import com.oa8000.htsystemSetting.HtSystemSetting01Manager;
+import com.oa8000.prison.PrisonManager;
+
+import com.oa8000.proxy.comm.HiOaMainClass;
+import com.oa8000.proxy.comm.HiUserInfo;
+import com.oa8000.proxy.comm.OaPubptDesEncrypter1;
+import com.oa8000.proxy.comm.OaTools;
+import com.oa8000.proxy.dao.HiMainDao;
+import com.oa8000.proxy.db.*;
+import com.oa8000.proxy.exception.OaException;
+import com.oa8000.proxy.tools.foundation.NSPathUtilities;
+import com.oa8000.server.hthr.HtHrServer;
+import com.oa8000.server.htjob.HtJobInterface;
+import com.oa8000.server.htmanager.HtRankGroupServer;
+import net.sf.json.JSONArray;
+import net.sf.json.JSONObject;
+import org.apache.commons.lang.StringUtils;
+import org.apache.commons.logging.Log;
+import org.apache.commons.logging.LogFactory;
+import org.quartz.JobExecutionContext;
+import org.quartz.JobExecutionException;
+
+import java.io.*;
+import java.net.URL;
+import java.net.URLConnection;
+import java.util.*;
+
+
+/**
+ * ???????
+ * ??????hthr00.subproj
+ *
+ * @review zhangyi 2020-06-23
+ */
+//******************************************************
+public class HtSynPrinsonUser extends HtJob00JobBase implements HtJobInterface {
+    private static final Log log = LogFactory.getLog(HtSynPrinsonUser.class);
+  
+    /**
+     * ????????????
+     *
+     * @param context ????????????
+     * @throws JobExecutionException ?????
+     */
+    public void execute(JobExecutionContext context) throws JobExecutionException {
+        super.execute(context);
+        try {
+            super.tryDoJob(context, this);
+        } catch (OaException e) {
+            e.printStackTrace();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * ????????÷???
+     *
+     * @param jobTaskDetailId ????detail??id
+     * @return ???map
+     * @throws OaException ??????
+     */
+    @Override
+    public Map doJob(String jobTaskDetailId) throws OaException {
+        super.doJob(jobTaskDetailId);
+        return doJob();
+    }
+
+    /**
+     * ???job????
+     */
+    private Map doJob() {
+        log.info("ContractRemind is running");
+        Map retMap = new HashMap();
+        retMap.put("status", HtJob00Constant.LOG_STATUS_SUCCESS);
+        retMap.put("repeatCount", 1);
+        HiUserInfo userInfo = new HiUserInfo(1);
+        userInfo.languageType = "CN";
+        try {
+            synUser();
+        } catch (Exception e) {
+            e.printStackTrace();
+            retMap.put("status", HtJob00Constant.LOG_STATUS_FAIL);
+        }
+        return retMap;
+    }
+
+
+    private void synUser() throws Exception {
+        HiOaMainClass manager = new HiOaMainClass();
+        List<HiDbHrDept> hrDeptList = manager.fetchDept();
+        manager.getUserArray();
+        for (HiDbHrDept dept : hrDeptList) {
+            String did = dept.getHrDeptId().replace("BM", "");
+            if (did.equals("ROOT")) {
+                did = "150000000";
+            }
+            String userInfo = new PrisonManager().synUserInfo(did);
+            if(StringUtils.isNotBlank(userInfo)) {
+                JSONObject dataObj = JSONObject.fromObject(userInfo);
+                JSONArray _jsa = dataObj.getJSONArray("records");
+                if (_jsa != null) {
+                    for (Object _o : _jsa) {
+                        JSONObject _eo = (JSONObject) _o;
+                        String uid = _eo.getString("staffId");
+                        String userName = _eo.getString("staffName");
+                        String gender = _eo.getString("sex");
+                        if("1".equals(gender)){
+                            gender = "0";
+                        }else{
+                            gender = "1";
+                        }
+                        String userShowId = _eo.getString("staffAccount");
+                        String userOrder = _eo.getString("seq");
+                        String avatarUrl = "";
+
+                        String email = _eo.getString("inEmail");
+                        String mobile = _eo.getString("mobile");
+                        String activeFlag = _eo.getString("delFlag");
+                        HiDbUserUser user = getUserUserByUid(uid);
+                        boolean creatFlag = false;
+                        List insertList = new LinkedList();
+                        List updateList = new LinkedList();
+                        if (user == null) {
+                            creatFlag = true;
+                            user = new HiDbUserUser();
+                            user.setUserId(createUserId());
+                            user.setPassword(OaPubptDesEncrypter1.MD5Encode(new HtSystemSetting01Manager().getInitPwd()));
+                            user.setOaAccountFlag(1);
+                            user.setCreateDate(new Date());
+                            user.setManagerFlag(-1);
+                            // ????HR???
+                            user.setHrAccountFlag(1);
+                            //????????
+                            user.setLastLoginTime(null);
+                            //???????????????????
+                            user.setOutUserFlag(HtHr00Constant.COMPANY_USER);
+                            user.setRtxUserId(uid);
+
+                        }
+
+                        user.setUserShowId(userShowId);
+                        user.setUserName(userName);
+                        System.out.println(user.getUserName());
+                        user.setPinyin(OaTools.gainedPinYin(user.getUserName().replace(" ","").replace("　","")));
+                        if ((!"null".equals(userOrder)) && (StringUtils.isNotBlank(userOrder))) {
+                            user.setUserOrder(Integer.valueOf(userOrder));
+                        } else {
+                            user.setUserOrder(999);
+                        }
+                        if("0".equals(activeFlag)) {
+                            user.setActiveFlag(1);
+                        } else if ("3".equals(activeFlag)) {
+                            user.setActiveFlag(4);
+                        } else {
+                            user.setActiveFlag(0);
+                        }
+                        user.setUserPhone(mobile);
+                        if (StringUtils.isNotBlank(avatarUrl) && StringUtils.isBlank(user.getHeaderImg())) {
+                            String fileName = downloadNet(avatarUrl);
+                            user.setHeaderImg(fileName);
+                        }
+
+                        user.setDeptId(dept.getHrDeptId());
+
+                        //2 StaffInfo
+                        HiDbHrStaffInfo staffInfo = saveStaffInfo(user, dept, null, gender, null, "adms");
+                        staffInfo.setCompanyMail(email);
+                        //3 userSetting
+                        HiDbUserSetting userSetting = createUserSetting(user.getUserId());
+                        //4 ???
+                        HiDbHrAddressListDetail addressListDetail = syncAddress(user, null, email);
+                        if (creatFlag) {
+                            insertList.add(user);
+                            insertList.add(staffInfo);
+                            insertList.add(userSetting);
+                            insertList.add(addressListDetail);
+                            manager.saveObjects(insertList, null, null);
+                            new HtRankGroupServer().insertUserToDefault(user.getUserId(), null);
+                        } else {
+                            updateList.add(user);
+                            updateList.add(staffInfo);
+                            updateList.add(userSetting);
+                            updateList.add(addressListDetail);
+                            manager.saveObjects(null, updateList, null);
+                        }
+                    }
+                    HiOaMainClass.setUserMapNull();
+                }
+            }
+        }
+
+    }
+
+    public String downloadNet(String filePath) {
+        // ???????????
+        int bytesum = 0;
+        int byteread = 0;
+        try {
+            URL url = new URL(filePath);
+            URLConnection conn = url.openConnection();
+            InputStream inStream = conn.getInputStream();
+            String fileType = NSPathUtilities.pathExtension(filePath);
+            String targetPath = OaTools.createOaBaseSysInfo().getTempPath() + OaTools.gainedFileName(fileType);
+            FileOutputStream fs = new FileOutputStream(targetPath);
+            byte[] buffer = new byte[1204];
+            while ((byteread = inStream.read(buffer)) != -1) {
+                bytesum += byteread;
+                fs.write(buffer, 0, byteread);
+            }
+            // ???????????
+            String fileName = OaBaseTools.gainedFileName(fileType);
+            String outputFilePath = OaTools.createOaBaseSysInfo().getDataUserImagePath() + fileName;
+            if (!OaBaseTools.moveFile(targetPath, outputFilePath, false)) {
+                return null;
+            }
+
+            return fileName;
+
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        return null;
+    }
+
+    public HiDbUserUser getUserUserByUid(String uid) {
+        String sql = " from com.oa8000.proxy.db.HiDbUserUser  where rtxUserId=?";
+        List p = new LinkedList();
+        p.add(uid);
+        List ary = new HiMainDao().findList(sql, p, 1);
+        if (ary != null && ary.size() > 0) {
+            HiDbUserUser user = (HiDbUserUser) ary.get(0);
+            return user;
+        }
+        return null;
+    }
+    public HiDbUserSetting getUserUserSettingByUid(String uid) {
+        String sql = " from com.oa8000.proxy.db.HiDbUserSetting  where userId=?";
+        List p = new LinkedList();
+        p.add(uid);
+        List ary = new HiMainDao().findList(sql, p, 1);
+        if (ary != null && ary.size() > 0) {
+            HiDbUserSetting user = (HiDbUserSetting) ary.get(0);
+            return user;
+        }
+        return null;
+    }
+    private HiDbHrStaffInfo saveStaffInfo(HiDbUserUser eoUser, HiDbHrDept selectedDept, Date birthday,
+                                          String staffSex, Date joinDay, String userId) throws OaException {
+        //20140529 qiaoguoyu ????????????????????HR??? start
+        HiDbHrStaffInfo eoStaffInfo = new HtHrServer().getHrStaffInfoByUserId(eoUser.getUserId());
+        if (eoStaffInfo != null) {
+            eoStaffInfo.setStaffName(eoUser.getUserName());
+            if (selectedDept != null) {
+                eoStaffInfo.setStaffCompany(selectedDept.getCompanyId());// ??????
+                eoStaffInfo.setDeptId(selectedDept.getHrDeptId());// ???????
+            }
+            if (birthday != null) {
+                eoStaffInfo.setStaffBirthday(birthday);
+            }
+
+            eoStaffInfo.setStaffSex(staffSex);
+            if (joinDay != null) {
+                eoStaffInfo.setDayJoin(joinDay);
+            }
+            eoStaffInfo.setUpdateTime(new Date());    // ??????
+            eoStaffInfo.setUpdateUserId(userId);       // ?????
+            if (StringUtils.isBlank(eoStaffInfo.getMobilePhone())) {
+                eoStaffInfo.setMobilePhone(eoUser.getUserPhone());
+            }
+        }
+        // ????????????????????????????? ???????????? ?????????????HR???
+        if (eoStaffInfo == null) {
+            eoStaffInfo = new HtSystemSetting01Manager().createHrStaff(null, userId);
+            eoStaffInfo.setHrStaffInfoId(eoUser.getUserId());
+            if (selectedDept != null) {
+                eoStaffInfo.setStaffCompany(selectedDept.getCompanyId());// ??????
+                eoStaffInfo.setDeptId(selectedDept.getHrDeptId());// ???????
+            }
+            eoStaffInfo.setStaffName(eoUser.getUserName());    // ???????
+            eoStaffInfo.setStaffNumber(eoUser.getUserShowId()); // ????
+            eoStaffInfo.setCreateTime(new Date());
+            eoStaffInfo.setCreateUserId(userId);
+            if (birthday != null) {
+                eoStaffInfo.setStaffBirthday(birthday);
+            }
+            eoStaffInfo.setStaffSex(staffSex);
+            if (joinDay != null) {
+                eoStaffInfo.setDayJoin(joinDay);
+            }
+            eoStaffInfo.setMobilePhone(eoUser.getUserPhone());
+        }
+        return eoStaffInfo;
+    }
+
+    /**
+     * ??????id?????
+     * 2014-10-21 qiaoguoyu ?????????id?????
+     *
+     * @return ??????id??????????BM??GW??
+     */
+    public String createUserId() {
+        String userId = OaTools.getAuthRandom();
+        int i = 0;
+        HtSystemSetting01Manager htSystemSetting01Manager = new HtSystemSetting01Manager();
+        while (userId.startsWith(OaSystemConstant.QZ_BM)
+                || userId.startsWith(OaSystemConstant.QZ_GW) || htSystemSetting01Manager.getUserUser(userId) != null) {
+            userId = OaTools.getAuthRandom();
+            i++;
+        }
+        return userId;
+    }
+
+
+    /**
+     * ?????????ü??,????????ü??????????????????????????????????????????
+     *
+     * @param userId ??????ID
+     * @return ???????????ü??
+     */
+    private HiDbUserSetting createUserSetting(String userId) throws OaException {
+
+        HiDbUserSetting systemUs = getSystemUserSetting(userId); //??????????????
+        //qiaoguoyu at 20131022 update for 6.0 BUG???????????????????????
+        // ????????????????????????????????±?????????
+        if (HtHr00Constant.SYSTEM_DEFAULT.equals(userId)) return systemUs;
+        HiDbUserSetting eoUserSetting = new HiDbUserSetting();
+        eoUserSetting.setUserId(userId);
+        // qiaoguoyu at 20131108 update for 6.0 ??????????
+        //??????????? ??MB???????????0??????
+        eoUserSetting.setHardDiskSize(systemUs.getHardDiskSize());
+        //???????????????????? ??MB???????????0??????
+        eoUserSetting.setSingleFileMaxSize(systemUs.getSingleFileMaxSize());
+        //????????????????????? ??MB???????????0??????
+        eoUserSetting.setTotalFileMaxSize(systemUs.getTotalFileMaxSize());
+        //??????????????IP??? "0:?????? 1??????"
+        eoUserSetting.setAuthIpFlag(systemUs.getAuthIpFlag());
+        //IP??????????
+        eoUserSetting.setUserIpStart(systemUs.getUserIpStart());
+        //IP???????????
+        eoUserSetting.setUserIpEnd(systemUs.getUserIpEnd());
+        //????????????? 0:?????? 1??????
+        eoUserSetting.setAuthInsideNetFlag(systemUs.getAuthInsideNetFlag());
+        //??????MAC?????? 0:?????? 1??????
+        eoUserSetting.setAuthMacFlag(systemUs.getAuthMacFlag());
+        // mac???
+        eoUserSetting.setUserMac(systemUs.getUserMac());
+        // ?????????????????????????????ID
+        eoUserSetting.setSoundId(systemUs.getSoundId());
+        //??????????OA????  0:?????? 1??????
+        eoUserSetting.setUseClientFlag(systemUs.getUseClientFlag());
+        //???????????  ?????????????????
+        eoUserSetting.setAuthImgFlag(systemUs.getAuthImgFlag());
+        //????????  ?????????????????
+        eoUserSetting.setMenuType(systemUs.getMenuType());
+        // ?????????ID
+        eoUserSetting.setUserSignFile(systemUs.getUserSignFile());
+        // ??????????? ?????????????????
+        eoUserSetting.setBrowserRefreshTime(systemUs.getBrowserRefreshTime());
+        //OA??????????
+        eoUserSetting.setClientRefreshTime(systemUs.getClientRefreshTime());
+        //?????ID
+        eoUserSetting.setUserSignImgFile(systemUs.getUserSignImgFile());
+        //???USB KEY???   0:????? 1??????
+        eoUserSetting.setAuthUsbKey(systemUs.getAuthUsbKey());
+        // ??????????????? ?????????????????
+        eoUserSetting.setPsdUseSoftInput(systemUs.getPsdUseSoftInput());
+        //????????????? 0??????
+        eoUserSetting.setPsdErrNum(systemUs.getPsdErrNum());
+        //??????????????????? ????????
+        eoUserSetting.setPsdErrCloseTime(systemUs.getPsdErrCloseTime());
+        //?????????? ??MB???????????0??????
+        eoUserSetting.setMailSpaceSize(systemUs.getMailSpaceSize());
+        //????????? ??MB???????????0??????
+        eoUserSetting.setInternalMailSpaceSize(systemUs.getInternalMailSpaceSize());//todo
+        //?????????????  0:?????? 1??????
+        eoUserSetting.setUseWx(systemUs.getUseWx());
+        //?????????????  0:?????? 1??????
+        eoUserSetting.setUseDd(systemUs.getUseDd());
+        //??????????RTX  0:?????? 1??????
+        eoUserSetting.setUseRtx(systemUs.getUseRtx());
+        //???RTX?????????????? 0:?????? 1??????
+        eoUserSetting.setRtxInputName(systemUs.getRtxInputName());
+        //?????0????????? 1????????
+        eoUserSetting.setLoginMode(systemUs.getLoginMode());
+        //????????????ip??? 0:?????? 1??????
+        eoUserSetting.setAuthAttFlag(systemUs.getAuthAttFlag());
+        //IP??????????
+        eoUserSetting.setAttIpStart(systemUs.getAttIpStart());
+        // IP???????????
+        eoUserSetting.setAttIpEnd(systemUs.getAttIpEnd());
+        //???????????????????????????  0:?????? 1??????
+        eoUserSetting.setAuthChangeSignFileFlag(systemUs.getAuthChangeSignFileFlag());
+        // ??????    ?????????????????
+        eoUserSetting.setDefaultPortal(systemUs.getDefaultPortal());
+        //????????????????? 0:?????? 1??????
+        eoUserSetting.setSendtoall(systemUs.getSendtoall());
+        //?????????????????????
+        eoUserSetting.setMsgSendUserNum(systemUs.getMsgSendUserNum());
+        //??????????????? null??????????
+        eoUserSetting.setMsgAwokeSetup(systemUs.getMsgAwokeSetup());
+        //????????????????????????????  0:?????? 1??????
+        eoUserSetting.setMsgAwokeUpdate(systemUs.getMsgAwokeUpdate());
+        //???????????
+        eoUserSetting.setWeatherCity(systemUs.getWeatherCity());
+        // ????????
+        eoUserSetting.setLastTime(systemUs.getLastTime());
+        // 20151012 qiaoguoyu ????????????????????????
+        eoUserSetting.setAuthMobileAddrFlag(systemUs.getAuthMobileAddrFlag());
+        return eoUserSetting;
+    }
+
+
+    HiDbUserSetting systemUs = null;
+
+    /**
+     * ?????????????? ??????????????????????????????????????????????????????
+     *
+     * @return ???????????
+     * @throws OaException ???????????
+     */
+    public HiDbUserSetting getSystemUserSetting(String userId) throws OaException {
+//        if (this.systemUs != null) {
+//            return this.systemUs;
+//        }
+        // ???????????????????????
+//        HashMap<String, String> map = new HashMap<String, String>();
+//        map.put("userId", HtHr00Constant.SYSTEM_DEFAULT);
+       // List queryResults = new HiMainDao().findList("UserSetting", "FetchById", map, 1);
+        HiDbUserSetting userSetting= getUserUserSettingByUid(userId);
+        // ??????????????
+        if (userSetting != null) {
+            System.out.println(userSetting.getUserSignImgFile());
+            return userSetting;
+        }
+        // ????????????????????
+        HiDbUserSetting systemUs = new HiDbUserSetting();
+        systemUs.setUserId(HtHr00Constant.SYSTEM_DEFAULT);
+        // qiaoguoyu at 20131108 update for 6.0??????????
+        //??????????? ??MB???????????0??????
+        systemUs.setHardDiskSize(0);
+        //???????????????????? ??MB???????????0??????
+        systemUs.setSingleFileMaxSize(0);
+        //????????????????????? ??MB???????????0??????
+        systemUs.setTotalFileMaxSize(0);
+        //??????????????IP??? "0:?????? 1??????"
+        systemUs.setAuthIpFlag(0);
+        //IP??????????
+        systemUs.setUserIpStart(null);
+        //IP???????????
+        systemUs.setUserIpEnd(null);
+        //????????????? 0:?????? 1??????
+        systemUs.setAuthInsideNetFlag(0);
+        //??????MAC?????? 0:?????? 1??????
+        systemUs.setAuthMacFlag(0);
+        // mac???
+        systemUs.setUserMac(null);
+        // ?????????????????????????????ID
+        systemUs.setSoundId(null);
+        //??????????OA????  0:?????? 1??????
+        systemUs.setUseClientFlag(1);
+        //???????????  ?????????????????
+        systemUs.setAuthImgFlag(null);
+        //????????  ?????????????????
+        systemUs.setMenuType(null);
+        // ?????????ID
+        systemUs.setUserSignFile(null);
+        // ??????????? ?????????????????
+        systemUs.setBrowserRefreshTime(null);
+        //OA??????????
+        systemUs.setClientRefreshTime(6000);
+        //?????ID
+        systemUs.setUserSignImgFile(null);
+        //???USB KEY???   0:????? 1??????
+        systemUs.setAuthUsbKey(0);
+        // ??????????????? ?????????????????
+        systemUs.setPsdUseSoftInput(null);
+        //????????????? 0??????
+        systemUs.setPsdErrNum(0);
+        //??????????????????? ????????
+        systemUs.setPsdErrCloseTime(0);
+        //?????????? ??MB???????????0??????
+        systemUs.setMailSpaceSize(0);
+        //????????? ??MB???????????0??????
+        systemUs.setInternalMailSpaceSize(0);
+        //??????????RTX  0:?????? 1??????
+        systemUs.setUseRtx(0);
+        //???RTX?????????????? 0:?????? 1??????
+        systemUs.setRtxInputName(0);
+        //?????0????????? 1????????
+        systemUs.setLoginMode(1);
+        //????????????ip??? 0:?????? 1??????
+        systemUs.setAuthAttFlag(0);
+        //IP??????????
+        systemUs.setAttIpStart(null);
+        // IP???????????
+        systemUs.setAttIpEnd(null);
+        //???????????????????????????  0:?????? 1??????
+        systemUs.setAuthChangeSignFileFlag(0);
+        // ??????    ?????????????????
+        systemUs.setDefaultPortal(null);
+        //????????????????? 0:?????? 1??????
+        systemUs.setSendtoall(1);
+        //?????????????????????
+        systemUs.setMsgSendUserNum(HtHr00Constant.ZERO);
+        //??????????????? null??????????
+        systemUs.setMsgAwokeSetup(null);
+        //????????????????????????????  0:?????? 1??????
+        systemUs.setMsgAwokeUpdate(1);
+        //???????????
+        systemUs.setWeatherCity(null);
+        // ????????
+        systemUs.setLastTime(null);
+        this.systemUs = systemUs;
+        return systemUs;
+    }
+
+    private HiDbHrAddressListDetail syncAddress(HiDbUserUser eoUser, Date birthday, String email) throws OaException {
+        HiDbHrAddressListDetail eoAddressListDetail = new HtHr02ManagerNew().getAddressListDetail(eoUser);
+        eoAddressListDetail.setFlag(HtHr00Constant.ONJOB);
+        eoAddressListDetail.setPersonnelName(eoUser.getUserName());
+        // ???????????
+        String str = OaTools.gainedPinYin(eoAddressListDetail.getPersonnelName());
+        str = str.substring(0, 1).toUpperCase();
+        eoAddressListDetail.setPersonnelPy(str);
+        eoAddressListDetail.setPersonnelDeptment(eoUser.getDeptId());
+        if (StringUtils.isBlank(eoAddressListDetail.getPersonnelMobile())) {
+            eoAddressListDetail.setPersonnelMobile(eoUser.getUserPhone());
+        }
+        if (birthday != null) {
+            eoAddressListDetail.setPersonnelBirthday(birthday);
+        }
+        eoAddressListDetail.setBusinessEmail(email);
+        if (StringUtils.isBlank(eoAddressListDetail.getAddressListDetailId())) {
+            eoAddressListDetail.setAddressListDetailId(eoUser.getUserId());
+            eoAddressListDetail.setCreateUserId(eoUser.getUserId());
+            Date date = new Date();
+            eoAddressListDetail.setCreateTime(date);
+            eoAddressListDetail.setUpdateTime(date);
+        } else {
+            eoAddressListDetail.setUpdateUserId(eoUser.getUserId());
+            eoAddressListDetail.setUpdateTime(new Date());
+
+        }
+        return eoAddressListDetail;
+    }
+	public static void main(String[] args) {
+		// TODO Auto-generated method stub
+          System.out.println("lsakdjflasjflj");
+	}
+
+}
